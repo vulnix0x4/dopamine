@@ -32,12 +32,13 @@ const parse = (c) => {
 };
 const mix = (a, b, t) => `rgb(${a.map((v, i) => Math.round(v + (b[i] - v) * t)).join(',')})`;
 
-export default function Field({selected, noise, rows = 22, still = false, inset = false, className = '', label}) {
+export default function Field({selected, noise, rows = 22, still = false, inset = false, fog = 0, className = '', label}) {
   const canvasRef = useRef(null);
-  const state = useRef({presence: {}, noise, selected, still});
+  const state = useRef({presence: {}, noise, selected, still, fog});
   state.current.selected = selected;
   state.current.noise = noise;
   state.current.still = still;
+  state.current.fog = fog;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -76,6 +77,7 @@ export default function Field({selected, noise, rows = 22, still = false, inset 
       // Ease toward targets so toggles grow and fade instead of snapping.
       const k = reduce.matches ? 1 : 1 - Math.pow(0.02, dt);
       s.smoothNoise += (s.noise - s.smoothNoise) * k;
+      s.smoothFog = (s.smoothFog ?? s.fog) + (s.fog - (s.smoothFog ?? s.fog)) * k;
       const ids = new Set([...Object.keys(s.presence), ...s.selected]);
       for (const id of ids) {
         const target = s.selected.includes(id) ? 1 : 0;
@@ -94,7 +96,7 @@ export default function Field({selected, noise, rows = 22, still = false, inset 
       const gap = (bottom - top) / (rows - 1);
       const step = w > 700 ? 3 : 2.5;
       const pad = Math.max(12, w * 0.02);
-      const left = inset ? (w > 520 ? 72 : 52) : pad;
+      const left = inset ? (w > 520 ? 76 : 66) : pad;
       const base = n < 0.5 ? mix(colors.cobalt, colors.ink, n * 2) : mix(colors.ink, colors.flare, (n - 0.5) * 1.1);
       const lw = w > 700 ? 1.25 : 1;
 
@@ -141,12 +143,14 @@ export default function Field({selected, noise, rows = 22, still = false, inset 
         g.addColorStop(0.55, mix(colors.flare, colors.ink, 0.35));
         g.addColorStop(1, base);
         ctx.strokeStyle = g;
+        ctx.globalAlpha = 1 - s.smoothFog * 0.6 * (0.6 + 0.4 * Math.sin(t * 0.8 + r * 0.9) ** 2);
         ctx.lineWidth = lw;
         ctx.lineJoin = 'round';
         ctx.stroke();
+        ctx.globalAlpha = 1;
       }
 
-      if (visible && (animate || Math.abs(s.noise - s.smoothNoise) > 0.001 || active.some((x) => x.amt % 1 > 0.001 && x.amt < 0.999))) {
+      if (visible && (animate || (Math.abs(s.noise - s.smoothNoise) > 0.001 || Math.abs(s.fog - s.smoothFog) > 0.002) || active.some((x) => x.amt % 1 > 0.001 && x.amt < 0.999))) {
         raf = requestAnimationFrame(draw);
       } else raf = 0;
     };
@@ -176,7 +180,7 @@ export default function Field({selected, noise, rows = 22, still = false, inset 
     };
   }, [rows]);
 
-  useEffect(() => { state.current.kick?.(); }, [selected, noise, still]);
+  useEffect(() => { state.current.kick?.(); }, [selected, noise, still, fog]);
 
   return <canvas ref={canvasRef} className={'field ' + className} role="img" aria-label={label} />;
 }

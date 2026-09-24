@@ -1,10 +1,12 @@
 import {useEffect, useMemo, useRef, useState} from 'react';
-import {ArrowDown, ArrowUpRight, Check, Github, Link2, Minimize2, Moon, Pause, Play, Plus, RotateCcw, Sun, X} from 'lucide-react';
+import {AlarmClock, ArrowDown, ArrowUpRight, BedDouble, Check, Github, Link2, Minimize2, Moon, Pause, Play, Plus, RotateCcw, Sun, Timer, VolumeX, X} from 'lucide-react';
 import Field from './Field.jsx';
+import {Backdrop, Confetti, fx, Jitter, Pings, Ticker} from './Chaos.jsx';
 import useFocusTimer from './useFocusTimer.js';
-import {activities, capacityCurve, groups, readHash, scenarios, simulate, writeHash} from './model.js';
+import {activities, capacityCurve, fmtTime, groups, habits, readHash, scenarios, simulate, writeHash} from './model.js';
 
 const REPO = 'https://github.com/vulnix0x4/dopamine';
+const QUIET_AT = 0.25;
 
 function useTween(value, ms = 650) {
   const [shown, setShown] = useState(value);
@@ -37,20 +39,33 @@ function useTheme() {
   return [isDark, () => setTheme(isDark ? 'light' : 'dark')];
 }
 
-const clock = (secs) => [Math.floor(secs / 60), secs % 60].map((n) => String(n).padStart(2, '0'));
+function useReveal() {
+  useEffect(() => {
+    const io = new IntersectionObserver((entries) => entries.forEach((e) => e.isIntersecting && e.target.classList.add('in')), {rootMargin: '0px 0px -8% 0px'});
+    document.querySelectorAll('.reveal').forEach((el) => io.observe(el));
+    return () => io.disconnect();
+  }, []);
+}
 
-function CapacityChart({score, compare, hours}) {
+const clock = (secs) => [Math.floor(secs / 60), secs % 60].map((n) => String(n).padStart(2, '0'));
+const center = (el) => { const r = el.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; };
+const buzz = (p) => { try { navigator.vibrate?.(p); } catch { /* unsupported */ } };
+const shake = () => {
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const el = document.documentElement;
+  el.classList.remove('shake'); void el.offsetWidth; el.classList.add('shake');
+};
+
+function CapacityChart({score, compare, quietScore}) {
   const W = 320, H = 120, pad = 6;
   const toPath = (vals) => vals.map((v, i) => `${i ? 'L' : 'M'}${(pad + (i / (vals.length - 1)) * (W - 2 * pad)).toFixed(1)},${(H - pad - (v / 100) * (H - 2 * pad)).toFixed(1)}`).join('');
-  const cur = capacityCurve(score);
-  const quiet = capacityCurve(simulate(['coffee', 'walk', 'reading'], hours).score);
+  const line = toPath(capacityCurve(score));
   const thresholdY = H - pad - 0.4 * (H - 2 * pad);
-  const line = toPath(cur);
   return (
     <svg className="capacity" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden="true">
       <line x1={pad} x2={W - pad} y1={thresholdY} y2={thresholdY} className="cap-threshold" />
       <path d={`${line}L${W - pad},${H}L${pad},${H}Z`} className="cap-area" />
-      {compare && <path d={toPath(quiet)} className="cap-ghost" />}
+      {compare && <path d={toPath(capacityCurve(quietScore))} className="cap-ghost" />}
       <path d={line} className="cap-line" />
     </svg>
   );
@@ -59,9 +74,10 @@ function CapacityChart({score, compare, hours}) {
 function Chip({a, on, onToggle}) {
   const Icon = a.icon;
   return (
-    <button className={`chip chip-${a.group}`} aria-pressed={on} onClick={() => onToggle(a.id)}>
-      <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span>{a.name}</span>
+    <button className={`chip chip-${a.group}`} aria-pressed={on} onClick={(e) => onToggle(a, e.currentTarget)}>
+      <Icon size={17} strokeWidth={1.8} aria-hidden="true" />
+      <span className="chip-name">{a.name}</span>
+      <span className="chip-weight" aria-hidden="true">{a.weight > 0 ? '+' : '−'}{Math.abs(a.weight)}</span>
       <span className="chip-mark" aria-hidden="true">{on ? <Check size={13} strokeWidth={2.5} /> : <Plus size={13} strokeWidth={2} />}</span>
     </button>
   );
@@ -116,21 +132,40 @@ function FocusOverlay({timer, onClose}) {
 
 export default function App() {
   const initial = useMemo(readHash, []);
-  const [selected, setSelected] = useState(initial.selected ?? scenarios[0].ids);
+  const start = scenarios[0];
+  const [selected, setSelected] = useState(initial.selected ?? start.ids);
+  const [hb, setHb] = useState(initial.habits ?? start.habits);
   const [hours, setHours] = useState(initial.hours ?? 4);
+  const [wake, setWake] = useState(initial.wake ?? 420);
+  const [sleep, setSleep] = useState(initial.sleep ?? start.sleep);
   const [compare, setCompare] = useState(false);
   const [overlay, setOverlay] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [pings, setPings] = useState(0);
   const [isDark, toggleTheme] = useTheme();
   const timer = useFocusTimer();
-  const sim = simulate(selected, hours);
+  const state = {selected, hours, wake, sleep, habits: hb};
+  const sim = simulate(state);
+  const quietScore = simulate({...state, selected: scenarios[2].ids, habits: scenarios[2].habits, sleep: 8}).score;
   const score = useTween(sim.score);
-  const preset = scenarios.find((s) => s.ids.length === selected.length && s.ids.every((id) => selected.includes(id)))?.id;
+  const quiet = sim.noise < QUIET_AT;
+  const preset = scenarios.find((sc) => sc.ids.length === selected.length && sc.ids.every((id) => selected.includes(id)))?.id;
+  useReveal();
 
-  useEffect(() => { writeHash(selected, hours); }, [selected, hours]);
+  useEffect(() => { writeHash(state); }, [selected, hours, wake, sleep, hb]);
   useEffect(() => {
-    document.documentElement.style.setProperty('--noise', sim.noise.toFixed(3));
+    const root = document.documentElement.style;
+    root.setProperty('--noise', sim.noise.toFixed(3));
+    root.setProperty('--pop', Math.max(0, Math.min(1, (sim.noise - 0.4) * 2.2)).toFixed(3));
   }, [sim.noise]);
+
+  // Payoff: crossing into quiet gets a soft burst of calm.
+  const wasQuiet = useRef(quiet);
+  useEffect(() => {
+    if (quiet && !wasQuiet.current) fx.burst(innerWidth / 2, innerHeight * 0.6, ['💙', '🫧', '🌿', '✨'], {count: 22, calm: true});
+    wasQuiet.current = quiet;
+  }, [quiet]);
+
   useEffect(() => {
     const onKey = (e) => {
       if (e.target.closest('input, textarea, select, [contenteditable]') || e.metaKey || e.ctrlKey || e.altKey || overlay) return;
@@ -140,20 +175,43 @@ export default function App() {
     return () => document.removeEventListener('keydown', onKey);
   }, [overlay, timer]);
 
-  const toggle = (id) => setSelected((s) => (s.includes(id) ? s.filter((i) => i !== id) : [...s, id]));
+  const toggle = (a, el) => {
+    const adding = !selected.includes(a.id);
+    setSelected((cur) => (cur.includes(a.id) ? cur.filter((i) => i !== a.id) : [...cur, a.id]));
+    if (!adding) return;
+    const [x, y] = center(el);
+    if (a.group === 'restore') { fx.burst(x, y, ['💙', '🫧', '🌿'], {count: 8, calm: true}); buzz(6); }
+    else { fx.burst(x, y, a.emoji, {count: a.group === 'high' ? 18 : 7}); buzz(a.group === 'high' ? [10, 40, 10] : 8); if (a.group === 'high') shake(); }
+  };
+  const toggleHabit = (h, el) => {
+    const adding = !hb.includes(h.id);
+    setHb((cur) => (cur.includes(h.id) ? cur.filter((i) => i !== h.id) : [...cur, h.id]));
+    if (adding) { const [x, y] = center(el); fx.burst(x, y, [h.emoji], {count: 8, calm: (h.cap || 0) > 0}); buzz(8); }
+  };
+  const applyScenario = (sc) => { setSelected(sc.ids); setHb(sc.habits); setSleep(sc.sleep); };
+  const muteAll = () => { setSelected(['walk', 'silence']); setHb((cur) => cur.filter((id) => id !== 'phoneFirst' && id !== 'bedScroll')); };
   const share = async () => {
     try { await navigator.clipboard.writeText(window.location.href); setCopied(true); setTimeout(() => setCopied(false), 1800); } catch { /* clipboard blocked */ }
   };
   const startFocus = () => { timer.start(); setOverlay(true); };
   const [m, s] = clock(timer.remaining);
   const sliceMins = Math.round((hours * 60) / 22);
-  const quietWith = () => {
-    const loudest = selected.map((id) => activities.find((a) => a.id === id)).filter((a) => a.group === 'high').sort((a, b) => b.weight - a.weight)[0];
-    setSelected((cur) => [...cur.filter((id) => id !== loudest?.id), ...(cur.includes('walk') ? [] : ['walk'])]);
-  };
+  const loudest = selected.map((id) => activities.find((a) => a.id === id)).filter((a) => a.group === 'high').sort((a, b) => b.weight - a.weight)[0];
+  const swapLoudest = () => setSelected((cur) => [...cur.filter((id) => id !== loudest?.id), ...(cur.includes('walk') ? [] : ['walk'])]);
+  const sources = [
+    ...selected.flatMap((id) => activities.find((a) => a.id === id).pings || []),
+    ...(hb.includes('phoneFirst') ? ['📱 You’ve picked up your phone 38 times'] : []),
+  ];
+  // Peak window: many people are most alert a few hours after waking (illustrative).
+  const peakStart = 2, peakEnd = 4.5;
+  const band = {top: Math.min(1, peakStart / hours), bottom: Math.min(1, peakEnd / hours)};
+  const headline = quiet ? 'Your brain, finally quiet.' : 'This is your brain on your phone.';
 
   return (
     <>
+      <Backdrop />
+      <Confetti />
+      <Pings noise={sim.noise} sources={sources} paused={overlay} onPing={() => setPings((p) => p + 1)} />
       <a className="skip" href="#field">Skip to the simulator</a>
       <header className="nav">
         <a className="brand" href="#top" aria-label="Dopamine, home">
@@ -175,29 +233,62 @@ export default function App() {
       </header>
 
       <main id="top">
+        <div className="wrap">
         <section className="hero">
-          <p className="kicker"><i className="pulse" />An attention simulator</p>
-          <h1 className="headline" aria-label="Quiet the signal.">
-            <span>Quiet the</span>
-            <span>signal<em>.</em></span>
+          <p className="kicker"><i className="pulse" />{quiet ? 'Quiet mode · you did that' : 'Live · an overloaded morning, simulated'}</p>
+          <h1 className="headline" aria-label={headline} key={headline}>
+            <Jitter text={headline} />
           </h1>
-          <div className="hero-foot">
-            <p className="lede">Choose what goes into your morning. Every spike in the field below is something pulling at your attention. Take things out and watch it settle.</p>
-            <a className="scroll-cue" href="#field"><ArrowDown size={16} />Try it</a>
+          <p className="lede">
+            {quiet
+              ? 'Notice how the page stopped yelling at you? That’s what fewer inputs feel like. Now’s a good time to focus on one thing.'
+              : 'This whole page is running a busy morning: feeds, pings, autoplay, news. Turn things off below and watch everything calm down.'}
+          </p>
+          <div className="noise-meter" role="meter" aria-label="Noise level" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(sim.noise * 100)}>
+            <div className="noise-head">
+              <span className="label">Noise level</span>
+              <span className="noise-val">{Math.round(sim.noise * 100)}%</span>
+            </div>
+            <div className="noise-bars" aria-hidden="true">
+              {Array.from({length: 24}, (_, i) => <i key={i} className={i < Math.round(sim.noise * 24) ? 'on' : ''} style={{'--i': i}} />)}
+            </div>
+            <div className="noise-foot">{pings} fake {pings === 1 ? 'ping' : 'pings'} since you got here</div>
           </div>
+          <div className="hero-actions">
+            {quiet
+              ? <button className="primary-btn big" onClick={startFocus}><Play size={18} />Start focusing</button>
+              : <button className="primary-btn big" onClick={muteAll}><VolumeX size={18} />Mute everything</button>}
+            <a className="ghost-btn big" href="#field"><ArrowDown size={17} />{quiet ? 'Tweak your morning' : 'Turn things off one by one'}</a>
+          </div>
+          <ol className="steps">
+            <li><b>1</b>Tap what’s in your morning</li>
+            <li><b>2</b>Watch the page react</li>
+            <li><b>3</b>Get it quiet, then focus</li>
+          </ol>
         </section>
+        </div>
 
+        <Ticker noise={sim.noise} />
+
+        <div className="wrap">
         <section className="instrument" id="field" aria-label="Simulator">
+          <div className="section-head reveal">
+            <h2>Build your morning</h2>
+            <p>Each line is a slice of your next {hours} hours, starting at {fmtTime(wake)}. Every spike is something grabbing your attention. Short sleep makes the lines fade.</p>
+          </div>
           <div className="field-panel">
             <div className="field-meta">
-              <span>Your next {hours} hours</span>
+              <span>From {fmtTime(wake)}</span>
               <span>One line ≈ {sliceMins} min</span>
             </div>
+            {band.top < 1 && (
+              <div className="peak-band" style={{'--t': band.top, '--b': band.bottom}} aria-hidden="true"><span>Peak window</span></div>
+            )}
             <div className="field-axis" aria-hidden="true">
-              <span>Now</span><span>+{Math.round(hours / 2)}h</span><span>+{hours}h</span>
+              <span>{fmtTime(wake)}</span><span>{fmtTime(wake + hours * 30)}</span><span>{fmtTime(wake + hours * 60)}</span>
             </div>
             <div className="field-score" aria-hidden="true"><b>{Math.round(score)}</b>/100</div>
-            <Field selected={selected} noise={sim.noise} inset label={`Attention field: ${sim.load.toLowerCase()} stimulation, focus capacity ${sim.score} out of 100.`} />
+            <Field selected={selected} noise={sim.noise} fog={sim.fog} inset label={`Attention field: ${sim.load.toLowerCase()} stimulation, focus capacity ${sim.score} out of 100.`} />
           </div>
 
           <aside className="readout" aria-live="polite">
@@ -209,23 +300,24 @@ export default function App() {
             </div>
             <dl className="readout-stats">
               <div><dt>Stimulation</dt><dd className={'load-' + sim.load.toLowerCase()}>{sim.load}</dd></div>
-              <div><dt>Deep work feels</dt><dd>{sim.feel}</dd></div>
+              <div><dt>Sleep</dt><dd className={sim.sleepDebt >= 2 ? 'load-high' : sim.sleepDebt ? '' : 'load-low'}>{sim.sleepDebt ? `${sim.sleepDebt}h short` : 'Rested'}</dd></div>
+              <div className="wide"><dt>Peak window</dt><dd>{fmtTime(wake + peakStart * 60)}–{fmtTime(wake + peakEnd * 60)}</dd></div>
             </dl>
             <div className="verdict">
-              <h2>{sim.verdict.title}</h2>
+              <h3>{sim.verdict.title}</h3>
               <p>{sim.verdict.body}</p>
-              {sim.high > 0 && <button className="text-btn" onClick={quietWith}>Swap your loudest input for a walk<ArrowUpRight size={14} /></button>}
+              {loudest && <button className="text-btn" onClick={swapLoudest}>Swap {loudest.name.toLowerCase()} for a walk<ArrowUpRight size={14} /></button>}
             </div>
             <div className="readout-chart">
               <div className="chart-head">
                 <span className="label">Capacity over time</span>
-                <button className="switch" role="switch" aria-checked={compare} onClick={() => setCompare(!compare)}><i />Slow start</button>
+                <button className="switch" role="switch" aria-checked={compare} onClick={() => setCompare(!compare)}><i />vs. slow start</button>
               </div>
-              <CapacityChart score={sim.score} compare={compare} hours={hours} />
+              <CapacityChart score={sim.score} compare={compare} quietScore={quietScore} />
             </div>
             <div className="readout-actions">
               <button className="primary-btn" onClick={startFocus}><Play size={16} />Start focusing<kbd>F</kbd></button>
-              <button className="ghost-btn" onClick={share}>{copied ? <Check size={16} /> : <Link2 size={16} />}{copied ? 'Link copied' : 'Copy link'}</button>
+              <button className="ghost-btn" onClick={share}>{copied ? <Check size={16} /> : <Link2 size={16} />}{copied ? 'Copied' : 'Share'}</button>
             </div>
           </aside>
 
@@ -233,19 +325,43 @@ export default function App() {
             <div className="mixer-bar">
               <div className="segmented" role="radiogroup" aria-label="Start from a scenario">
                 {scenarios.map((sc) => (
-                  <button key={sc.id} role="radio" aria-checked={preset === sc.id} onClick={() => setSelected(sc.ids)}>{sc.label}</button>
+                  <button key={sc.id} role="radio" aria-checked={preset === sc.id} onClick={() => applyScenario(sc)}>{sc.label}</button>
                 ))}
               </div>
-              <label className="range">
-                <span>Window</span>
-                <input type="range" min="2" max="8" step="1" value={hours} onChange={(e) => setHours(Number(e.target.value))} style={{'--p': `${((hours - 2) / 6) * 100}%`}} />
-                <output>{hours}h</output>
-              </label>
-              <button className="text-btn" onClick={() => setSelected([])} disabled={!selected.length}><RotateCcw size={14} />Clear all</button>
+              <button className="text-btn" onClick={() => setSelected([])} disabled={!selected.length}><RotateCcw size={14} />Clear inputs</button>
             </div>
+
+            <fieldset className="body-clock reveal">
+              <legend><span>Your body clock</span><small>When you woke up and how you slept shift everything</small></legend>
+              <div className="sliders">
+                <label className="slider">
+                  <span className="slider-label"><AlarmClock size={16} />Woke up at</span>
+                  <output>{fmtTime(wake)}</output>
+                  <input type="range" min="270" max="660" step="15" value={wake} onChange={(e) => setWake(Number(e.target.value))} style={{'--p': `${((wake - 270) / 390) * 100}%`}} />
+                </label>
+                <label className="slider">
+                  <span className="slider-label"><BedDouble size={16} />Hours of sleep</span>
+                  <output>{sleep}h</output>
+                  <input type="range" min="4" max="10" step="0.5" value={sleep} onChange={(e) => setSleep(Number(e.target.value))} style={{'--p': `${((sleep - 4) / 6) * 100}%`}} />
+                </label>
+                <label className="slider">
+                  <span className="slider-label"><Timer size={16} />Hours to plan</span>
+                  <output>{hours}h</output>
+                  <input type="range" min="2" max="8" step="1" value={hours} onChange={(e) => setHours(Number(e.target.value))} style={{'--p': `${((hours - 2) / 6) * 100}%`}} />
+                </label>
+              </div>
+              <div className="habits">
+                {habits.map((h) => (
+                  <button key={h.id} className={'habit ' + ((h.cap || 0) > 0 ? 'good' : 'bad')} aria-pressed={hb.includes(h.id)} onClick={(e) => toggleHabit(h, e.currentTarget)}>
+                    <span className="habit-emoji" aria-hidden="true">{h.emoji}</span>{h.name}
+                  </button>
+                ))}
+              </div>
+            </fieldset>
+
             <div className="groups">
               {groups.map((g) => (
-                <fieldset key={g.id} className={'group group-' + g.id}>
+                <fieldset key={g.id} className={'group group-' + g.id + ' reveal'}>
                   <legend><span>{g.label}</span><small>{g.hint}</small></legend>
                   <div className="chips">
                     {activities.filter((a) => a.group === g.id).map((a) => <Chip key={a.id} a={a} on={selected.includes(a.id)} onToggle={toggle} />)}
@@ -255,12 +371,16 @@ export default function App() {
             </div>
           </div>
         </section>
+        </div>
 
-        <section className="focus" id="focus" aria-labelledby="focus-title">
+        <Ticker noise={sim.noise} reverse />
+
+        <div className="wrap">
+        <section className="focus reveal" id="focus" aria-labelledby="focus-title">
           <div className="focus-copy">
             <p className="kicker">Focus session</p>
             <h2 id="focus-title">One thing.<br />Nothing else.</h2>
-            <p>Name the task, pick a length, and the page clears out of your way. The timer keeps running if you close the tab and come back.</p>
+            <p>Name the task, pick a length, and the page clears out of your way. No pings, no tickers. The timer keeps running if you close the tab and come back.</p>
           </div>
           <div className="focus-card">
             <label className="task">
@@ -282,24 +402,25 @@ export default function App() {
           </div>
         </section>
 
-        <section className="how" id="how" aria-labelledby="how-title">
+        <section className="how reveal" id="how" aria-labelledby="how-title">
           <h2 id="how-title">How it works</h2>
           <div className="how-grid">
             <article>
-              <h3>What the field shows</h3>
-              <p>Each line is a slice of your time window, earliest at the top. Quick hits add tall, sharp spikes. Everyday inputs add soft bumps. Breathing room calms everything.</p>
+              <h3>The page is the simulation</h3>
+              <p>Everything you pick adds or removes noise. The noise drives the field, the pings, the tickers, even how hard the headline shakes. Quiet it down and the whole page calms with it.</p>
             </article>
             <article>
-              <h3>What the number means</h3>
-              <p>Every activity has a fixed weight. The capacity score adds them up and scales by the window, so you can compare one mix with another. The deep work line sits at 40.</p>
+              <h3>Your body clock counts</h3>
+              <p>Short sleep lowers capacity and fades the field. Grabbing your phone first thing counts as a quick hit. Early sunlight and water help a little. Many people are sharpest a few hours after waking, which is where the peak window sits.</p>
             </article>
             <article>
               <h3>What it isn’t</h3>
-              <p>It doesn’t measure dopamine or say anything medical. Coffee and music affect people differently. Treat it as a prompt to notice your own habits, not a verdict.</p>
+              <p>It doesn’t measure dopamine or say anything medical. Every weight is fixed and illustrative, and real people vary a lot. Treat it as a prompt to notice your own habits, not a verdict.</p>
             </article>
           </div>
           <p className="how-note">Everything runs in your browser. Nothing you choose or type is sent anywhere. <a href={REPO} target="_blank" rel="noreferrer">Read the source<ArrowUpRight size={13} /></a></p>
         </section>
+        </div>
       </main>
 
       <footer className="footer">
