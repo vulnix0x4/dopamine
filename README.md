@@ -2,7 +2,7 @@
 
 **Quiet the signal.** Live at **[dopamine.lukewhaley.workers.dev](https://dopamine.lukewhaley.workers.dev)**.
 
- An attention simulator: choose what goes into your morning and watch a live signal field react, then start a focus session.
+An attention simulator: choose what goes into your morning and watch a live signal field react, then start a focus session.
 
 ![Dopamine](public/og.png)
 
