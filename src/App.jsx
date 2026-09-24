@@ -166,6 +166,20 @@ export default function App() {
     wasQuiet.current = quiet;
   }, [quiet]);
 
+  // Ambient emoji drift, faster the noisier the morning.
+  const live = useRef({});
+  live.current = {noise: sim.noise, overlay, emoji: selected.flatMap((id) => activities.find((a) => a.id === id).emoji || [])};
+  useEffect(() => {
+    let t;
+    const tick = () => {
+      const {noise, overlay: o, emoji} = live.current;
+      if (noise >= QUIET_AT && !o && emoji.length) fx.float(emoji);
+      t = setTimeout(tick, noise < QUIET_AT ? 1200 : 1500 - noise * 1150 + Math.random() * 400);
+    };
+    tick();
+    return () => clearTimeout(t);
+  }, []);
+
   useEffect(() => {
     const onKey = (e) => {
       if (e.target.closest('input, textarea, select, [contenteditable]') || e.metaKey || e.ctrlKey || e.altKey || overlay) return;
@@ -217,6 +231,7 @@ export default function App() {
         <a className="brand" href="#top" aria-label="Dopamine, home">
           <svg viewBox="0 0 28 20" aria-hidden="true"><path d="M1 15h6l3-12 4 16 3-9 2 5h8" /></svg>
           dopamine
+          {pings > 0 && !quiet && <span className="badge" key={pings} aria-hidden="true">{pings > 99 ? '99+' : pings}</span>}
         </a>
         <nav className="nav-links" aria-label="Sections">
           <a href="#field">Simulator</a>
@@ -233,6 +248,7 @@ export default function App() {
       </header>
 
       <main id="top">
+        <Ticker noise={sim.noise} slim />
         <div className="wrap">
         <section className="hero">
           <p className="kicker"><i className="pulse" />{quiet ? 'Quiet mode · you did that' : 'Live · an overloaded morning, simulated'}</p>
