@@ -5,7 +5,7 @@ import {Fragment, useEffect, useRef, useState} from 'react';
 
 const reduced = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-export const fx = {burst: () => {}};
+export const fx = {burst: () => {}, float: () => {}};
 
 export function Confetti() {
   const ref = useRef(null);
@@ -22,9 +22,9 @@ export function Confetti() {
       ctx.clearRect(0, 0, innerWidth, innerHeight);
       parts = parts.filter((p) => (p.life -= dt) > 0);
       for (const p of parts) {
-        p.vy += p.g * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.r += p.vr * dt;
+        p.vy += p.g * dt; p.x += (p.vx + (p.wob ? Math.sin((p.age = (p.age || 0) + dt) * 3 + p.wob) * 40 : 0)) * dt; p.y += p.vy * dt; p.r += p.vr * dt;
         ctx.save();
-        ctx.globalAlpha = Math.min(1, p.life * 2);
+        ctx.globalAlpha = Math.min(p.alpha ?? 1, p.life * 2);
         ctx.translate(p.x, p.y); ctx.rotate(p.r);
         ctx.font = `${p.size}px system-ui, "Apple Color Emoji", "Segoe UI Emoji", sans-serif`;
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -47,9 +47,19 @@ export function Confetti() {
       }
       if (!raf) { last = performance.now(); raf = requestAnimationFrame(frame); }
     };
+    // Ambient drift: emoji rising from the bottom edge.
+    fx.float = (emojis) => {
+      if (reduced() || document.hidden) return;
+      parts.push({
+        x: Math.random() * innerWidth, y: innerHeight + 30, e: emojis[Math.floor(Math.random() * emojis.length)],
+        vx: 0, vy: -(90 + Math.random() * 120), g: 0, r: (Math.random() - 0.5) * 0.6, vr: (Math.random() - 0.5) * 0.8,
+        size: 22 + Math.random() * 22, life: (innerHeight + 60) / 110, alpha: 0.85, wob: Math.random() * 6,
+      });
+      if (!raf) { last = performance.now(); raf = requestAnimationFrame(frame); }
+    };
     resize();
     addEventListener('resize', resize);
-    return () => { removeEventListener('resize', resize); cancelAnimationFrame(raf); fx.burst = () => {}; };
+    return () => { removeEventListener('resize', resize); cancelAnimationFrame(raf); fx.burst = () => {}; fx.float = () => {}; };
   }, []);
   return <canvas ref={ref} className="confetti" aria-hidden="true" />;
 }
@@ -72,7 +82,7 @@ export function Pings({noise, sources, paused, onPing}) {
           const text = pool[Math.floor(Math.random() * pool.length)];
           recent = [...recent.slice(-3), text];
           const key = ++id;
-          const max = innerWidth < 640 ? 1 : 3;
+          const max = innerWidth < 640 ? 2 : 3;
           setItems((cur) => [...cur.slice(-(max - 1)), {key, text, tilt: (Math.random() - 0.5) * 4}]);
           setTimeout(() => setItems((cur) => cur.filter((t) => t.key !== key)), 3600);
           cb?.();
@@ -99,11 +109,11 @@ export function Pings({noise, sources, paused, onPing}) {
 const LOUD = ['+1 LIKE', '🔔 NEW', '🔥 TRENDING', '▶ UP NEXT', '💬 48 UNREAD', '⚡ LIMITED TIME', '👀 SEEN', '📈 GOING VIRAL', '❤️ 2.1K', '🔴 LIVE', '✨ FOR YOU', '📰 BREAKING'];
 const QUIET = ['nothing new', 'you’re all caught up', 'breathe in', 'breathe out', 'nothing new', 'one thing at a time'];
 
-export function Ticker({noise, reverse = false}) {
+export function Ticker({noise, reverse = false, slim = false}) {
   const words = noise < 0.25 ? QUIET : LOUD;
   const row = [...words, ...words];
   return (
-    <div className={'ticker ' + (noise < 0.25 ? 'is-quiet' : '') + (reverse ? ' reverse' : '')} aria-hidden="true">
+    <div className={'ticker ' + (noise < 0.25 ? 'is-quiet' : '') + (reverse ? ' reverse' : '') + (slim ? ' slim' : '')} aria-hidden="true">
       <div className="ticker-track">
         {[0, 1].map((k) => (
           <span key={k}>{row.map((w, i) => <b key={i}>{w}<i>✦</i></b>)}</span>
